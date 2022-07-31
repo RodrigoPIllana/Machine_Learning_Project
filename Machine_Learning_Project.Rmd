@@ -1,0 +1,131 @@
+---
+title: "Machine Learning Project"
+author: "Rodrigo Peña"
+date: "7/30/2022"
+output: html_document
+---
+
+```{r setoptions, echo=FALSE}
+knitr::opts_chunk$set(echo=TRUE,cache=FALSE,message = FALSE)
+```
+
+# Synopsis
+
+One thing that people regularly do is quantify how  much of a particular activity they do, but they rarely quantify how well they do it.The goal of this project is to predict the manner in which they did the exercise.
+The main strategy that will be followed is: after cleaning the data, three subsets will be created: one for training, one for testing the different models, and a last one for validation of the chosen model.
+
+# Data preparation
+
+```{r Data}
+if (file.exists('preddata.csv') == FALSE){
+        download.file('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv',
+                      destfile = './preddata.csv',method = 'curl')     
+}
+if (file.exists('quiz.csv') == FALSE) {
+        download.file('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv',
+                      destfile = './quiz.csv',method = 'curl')
+}
+
+preddata <- read.csv('preddata.csv')
+quiz <- read.csv('quiz.csv')
+library(caret)
+library(rattle)
+library(ElemStatLearn)
+library(randomForest)
+library(e1071)
+library(h2o)
+set.seed(68490)
+```
+
+We then proceed to modify the class of certain variables into factor and POSIXct.
+
+```{r factor}
+preddata$classe <- factor(preddata$classe)
+preddata$user_name <- factor(preddata$user_name)
+preddata$cvtd_timestamp <- as.POSIXct(preddata$cvtd_timestamp,format='%d/%m/%Y %H:%M')
+```
+
+We drop the variable X, which merely indicates the number of the observation. Likewise, certain variables that happen to have a considerable number of NA are removed.
+
+```{r nas}
+preddata <- preddata[,2:dim(preddata)[2]]
+navles <- apply(preddata,2,function(x) any(is.na(x)))
+preddata <- preddata[,!navles]
+```
+
+Now we create the data subsets.
+
+```{r sets}
+inTrain <- createDataPartition(y=preddata$classe,p=.6,list=FALSE)
+training <- preddata[inTrain,]
+testing <- preddata[-inTrain,]
+inTrain <- createDataPartition(y=testing$classe,list=FALSE)
+validation <- preddata[inTrain,]
+testing <- preddata[-inTrain,]
+```
+
+Finally, we remove those variables that have a strikingly low variance, and that therefore have barely no prediction power. For this purpose we use the training subset.
+
+```{r var}
+novar <- nearZeroVar(training)
+training <- training[,-novar]
+testing <- testing[,-novar]
+validation <- validation[,-novar]
+```
+
+# Model prediction
+
+## Decision Tree
+
+```{r tree}
+modtree <- train(classe~.,method='rpart',data=training)
+fancyRpartPlot(modtree$finalModel)
+confusionMatrix(testing$classe,predict(modtree,testing))
+```
+
+## Support Vector Machine
+
+```{r svm}
+modsvm <- svm(classe~.,data=training)
+confusionMatrix(testing$classe,predict(modsvm,testing))
+```
+
+## Gradient Boosted Trees
+
+```{r gbm1, results=FALSE}
+h2o.init()
+predictors <- colnames(training)[1:57]
+response <- colnames(training)[58]
+trainsp <- as.h2o(training)
+testsp <- as.h2o(testing)
+modgbm <- h2o.gbm(x=predictors,y=response,training_frame = trainsp,
+                  validation_frame = testsp,ntrees=100,distribution='multinomial')
+predgbm <- predict(modgbm,testsp)
+perf <- h2o.performance(modgbm,testsp)
+```
+
+```{r gbm2}
+h2o.confusionMatrix(modgbm,testsp)
+1-0.0008 #Accuracy
+```
+
+## Random Forest
+
+```{r rf}
+modrf <- randomForest(classe~.,data=training)
+varImpPlot(modrf)
+confusionMatrix(testing$classe,predict(modrf,testing))
+```
+
+# Chosen Model And Validation
+
+The model that performs the best, in terms of accuracy, is the random forest. We proceed then to apply it to the validation subset.
+
+```{r val}
+conf<-confusionMatrix(validation$classe,predict(modrf,validation))
+ac <- conf$overall[1]
+conf
+```
+
+Using validation data, the resulting accuracy of the random forest model is `r ac`, which indicates a really precise prediction.
+The associated expected out of sample error is, hence, `r 1-ac`.
